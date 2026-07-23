@@ -20,11 +20,11 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-sagapay-sdk = "0.2.0"
+sagapay = "0.2.0"
 tokio = { version = "1", features = ["full"] }
 ```
 
-The crate is published as `sagapay-sdk` and imported as `sagapay`.
+The crate is published and imported as `sagapay`.
 
 Requires Rust 1.85 or newer (edition 2024).
 

@@ -1,5 +1,5 @@
 [package]
-name = "sagapay-sdk"
+name = "sagapay"
 version = "0.2.0"
 edition = "2024"
 rust-version = "1.85"
@@ -8,14 +8,11 @@ description = "Rust SDK for SagaPay - The world's first free, non-custodial bloc
 license = "MIT"
 repository = "https://github.com/rootdigit/sagapay-rust"
 homepage = "https://sagapay.net"
-documentation = "https://docs.rs/sagapay-sdk"
+documentation = "https://docs.rs/sagapay"
 keywords = ["blockchain", "payment", "cryptocurrency", "fintech", "sagapay"]
 categories = ["api-bindings", "finance", "web-programming"]
 readme = "readme.md"
 
-[lib]
-name = "sagapay"
-path = "src/lib.rs"
 
 [dependencies]
 reqwest = { version = "0.13.4", features = ["json", "query"] }

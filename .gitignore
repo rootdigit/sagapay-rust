@@ -1,0 +1,18 @@
+# Build artifacts
+/target/
+
+# rustfmt backups
+**/*.rs.bk
+
+# Environment
+.env
+.env.*
+
+# Editor directories
+.idea/
+.vscode/
+*.swp
+
+# OS files
+.DS_Store
+Thumbs.db

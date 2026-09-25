@@ -16,7 +16,7 @@ impl Default for Config {
         Self {
             api_key: String::new(),
             api_secret: String::new(),
-            base_url: "https://api2.sagapay.net".to_string(),
+            base_url: "https://api2.sagapay.io".to_string(),
         }
     }
 }

@@ -1,13 +1,13 @@
 [package]
 name = "sagapay"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 rust-version = "1.85"
-authors = ["SagaPay Team <support@sagapay.net>"]
+authors = ["SagaPay Team <support@sagapay.io>"]
 description = "Rust SDK for SagaPay - The world's first free, non-custodial blockchain payment gateway"
 license = "MIT"
 repository = "https://github.com/rootdigit/sagapay-rust"
-homepage = "https://sagapay.net"
+homepage = "https://sagapay.io"
 documentation = "https://docs.rs/sagapay"
 keywords = ["blockchain", "payment", "cryptocurrency", "fintech", "sagapay"]
 categories = ["api-bindings", "finance", "web-programming"]

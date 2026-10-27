@@ -23,6 +23,9 @@ impl Client {
     pub fn new(config: Config) -> Self {
         let http_client = ReqwestClient::builder()
             .timeout(std::time::Duration::from_secs(30))
+            // The API never redirects. reqwest would resend the x-api-key and
+            // x-api-secret headers to the new location.
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .expect("Failed to create HTTP client");
 
@@ -65,7 +68,7 @@ impl Client {
         &self,
         params: CreateDepositParams,
     ) -> Result<DepositResponse, Error> {
-        self.post("/create-deposit", &params).await
+        self.post("/create-deposit", &params, None).await
     }
 
     /// Create a withdrawal
@@ -100,7 +103,24 @@ impl Client {
         &self,
         params: CreateWithdrawalParams,
     ) -> Result<WithdrawalResponse, Error> {
-        self.post("/create-withdrawal", &params).await
+        self.post("/create-withdrawal", &params, None).await
+    }
+
+    /// Create a withdrawal with an `Idempotency-Key` header
+    ///
+    /// `idempotency_key` is 1-128 letters, digits, `-` or `_`. Retrying with
+    /// the same key within 24 hours returns the first request's withdrawal
+    /// instead of creating a second one, so a retry after a timeout cannot
+    /// send the money twice. While the first request is still running, a
+    /// repeat fails with a 409 [`Error::ApiError`]. Use one key per payout,
+    /// such as your own payout id.
+    pub async fn create_withdrawal_idempotent(
+        &self,
+        params: CreateWithdrawalParams,
+        idempotency_key: &str,
+    ) -> Result<WithdrawalResponse, Error> {
+        self.post("/create-withdrawal", &params, Some(idempotency_key))
+            .await
     }
 
     /// Check transaction status by address or ID
@@ -315,14 +335,22 @@ impl Client {
         self.handle_response(response).await
     }
 
-    /// Make a POST request
+    /// Make a POST request, with an `Idempotency-Key` header when given
     async fn post<T: DeserializeOwned, D: Serialize + ?Sized>(
         &self,
         path: &str,
         data: &D,
+        idempotency_key: Option<&str>,
     ) -> Result<T, Error> {
         let url = format!("{}{}", self.config.base_url, path);
-        let headers = self.build_headers()?;
+        let mut headers = self.build_headers()?;
+        if let Some(key) = idempotency_key {
+            headers.insert(
+                "idempotency-key",
+                HeaderValue::from_str(key)
+                    .map_err(|e| Error::InvalidParameter(format!("idempotency_key: {}", e)))?,
+            );
+        }
 
         let response = self
             .http_client

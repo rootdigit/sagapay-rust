@@ -35,6 +35,11 @@ pub enum Error {
     #[error("Invalid webhook signature")]
     InvalidSignature,
 
+    /// Webhook timestamp is older than the handler's maximum age, or too far
+    /// in the future
+    #[error("Webhook timestamp is outside the allowed age")]
+    StaleWebhook,
+
     /// Other errors
     #[error("{0}")]
     Other(String),

@@ -33,17 +33,21 @@ async fn main() -> Result<(), sagapay::Error> {
     println!("  Status: {:?}", deposit.status);
     println!();
 
-    // Example 2: Create a withdrawal
+    // Example 2: Create a withdrawal. The idempotency key means a retry after
+    // a timeout cannot send the money twice; use one key per payout.
     println!("Creating withdrawal...");
     let withdrawal = client
-        .create_withdrawal(CreateWithdrawalParams {
-            network_type: NetworkType::ERC20,
-            contract_address: "0xdAC17F958D2ee523a2206206994597C13D831ec7".to_string(), // USDT on Ethereum
-            address: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string(),
-            amount: "10.5".to_string(),
-            ipn_url: "https://yourwebsite.com/webhook".to_string(),
-            udf: Some("withdrawal-456".to_string()),
-        })
+        .create_withdrawal_idempotent(
+            CreateWithdrawalParams {
+                network_type: NetworkType::ERC20,
+                contract_address: "0xdAC17F958D2ee523a2206206994597C13D831ec7".to_string(), // USDT on Ethereum
+                address: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string(),
+                amount: "10.5".to_string(),
+                ipn_url: "https://yourwebsite.com/webhook".to_string(),
+                udf: Some("withdrawal-456".to_string()),
+            },
+            "payout-456",
+        )
         .await?;
 
     println!("✓ Withdrawal created:");

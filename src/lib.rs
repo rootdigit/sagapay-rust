@@ -37,11 +37,11 @@
 //!
 //! ## Notifications (IPN)
 //!
-//! [`WebhookHandler`] parses incoming notifications and, when you have been
-//! issued a platform IPN secret, verifies their `X-Sagapay-Signature` header.
-//! [`Client::verify_ipn`] is the primary check: it asks the API to confirm the
-//! transaction. Notifications are delivered at least once, so keep your handler
-//! idempotent.
+//! [`WebhookHandler`] verifies each notification's `X-Sagapay-Merchant-Signature`
+//! header with your signing secret (dashboard: Webhooks → Signing secret), then
+//! parses it. Notifications are delivered at least once, and a replayed request
+//! carries a valid signature too, so act on each `id` only once.
+//! [`is_ipn_fresh`] optionally rejects old notifications.
 
 mod client;
 mod config;
@@ -53,4 +53,4 @@ pub use client::Client;
 pub use config::Config;
 pub use error::Error;
 pub use models::*;
-pub use webhook::WebhookHandler;
+pub use webhook::{DEFAULT_MAX_AGE, SIGNATURE_HEADER, WebhookHandler, is_ipn_fresh};

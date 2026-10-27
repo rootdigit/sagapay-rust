@@ -239,10 +239,18 @@ pub struct WebhookPayload {
     pub address: String,
     #[serde(rename = "networkType")]
     pub network_type: NetworkType,
+    /// Token symbol of what was received, e.g. `USDT`. `network_type` alone
+    /// does not tell 100 TRX from 100 USDT, so check this before crediting.
+    #[serde(default)]
+    pub asset: Option<String>,
+    /// Token contract / mint; `None` for the chain's native coin
+    #[serde(default, rename = "contractAddress")]
+    pub contract_address: Option<String>,
     pub amount: String,
     pub udf: Option<String>,
     #[serde(rename = "txHash")]
     pub tx_hash: Option<String>,
+    /// Set when the transaction completes; unchanged on retries
     pub timestamp: DateTime<Utc>,
 }
 

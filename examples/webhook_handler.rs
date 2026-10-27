@@ -1,5 +1,7 @@
-use sagapay::{Client, Config, Error, IpnType, TransactionStatus, VerifyIpnParams, WebhookHandler};
-use std::collections::HashMap;
+use hmac::{Hmac, KeyInit, Mac};
+use sagapay::{DEFAULT_MAX_AGE, Error, IpnType, SIGNATURE_HEADER, WebhookHandler, WebhookPayload};
+use sha2::Sha256;
+use std::collections::{HashMap, HashSet};
 
 // This example shows how to handle a webhook (IPN) in a server context.
 // This is a simplified example - in a real implementation you would
@@ -11,165 +13,117 @@ const SAMPLE_BODY: &str = r#"{
   "status": "COMPLETED",
   "address": "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
   "networkType": "BEP20",
+  "asset": "USDT",
+  "contractAddress": "0x55d398326f99059fF775485246999027B3197955",
   "amount": "1.5",
   "udf": "order-123",
   "txHash": "0xabc123",
   "timestamp": "2025-03-16T14:30:00.000Z"
 }"#;
 
-#[tokio::main]
-async fn main() {
+// Stand-in for your signing secret (dashboard → Webhooks → Signing secret).
+// Load the real one from configuration; never commit it.
+const DEMO_SECRET: &str = "demo-signing-secret";
+
+fn main() {
     println!("This is an example webhook handler implementation.");
     println!("In a real app, integrate this with your web framework.");
     println!();
 
-    // Without a platform-issued IPN secret the handler only parses the body:
-    // signature verification is skipped and no signature header is required.
-    let parse_only = WebhookHandler::new(None);
-    let payload = parse_only
-        .process_webhook(SAMPLE_BODY, None)
-        .expect("sample payload should parse");
+    let signing_secret =
+        std::env::var("SAGAPAY_SIGNING_SECRET").unwrap_or_else(|_| DEMO_SECRET.to_string());
+    let webhook_handler = WebhookHandler::new(signing_secret.clone());
 
-    println!("Parsed sample payload:");
-    println!("  ID: {}", payload.id);
-    println!("  Type: {:?}", payload.transaction_type); // DEPOSIT / WITHDRAWAL
-    println!("  Status: {:?}", payload.status);
-    println!("  Amount: {}", payload.amount);
-    println!();
-    println!("Parsing alone proves nothing - always confirm with verify_ipn.");
+    // SagaPay sends this header with every notification. Here we sign the
+    // sample body ourselves so the example runs without a server.
+    let mut headers = HashMap::new();
+    headers.insert(
+        SIGNATURE_HEADER.to_string(),
+        sign(&signing_secret, SAMPLE_BODY),
+    );
 
-    // The handler below is what you would call from your HTTP route. It talks
-    // to the API, so it only runs when you ask for it explicitly.
-    if std::env::var("SAGAPAY_RUN_HANDLER").is_ok() {
-        let client = Client::new(Config {
-            api_key: "your-api-key".to_string(),
-            api_secret: "your-api-secret".to_string(),
-            ..Config::default()
-        });
+    // IDs already handled. Use a database table with a unique column in
+    // production; this set is lost on restart.
+    let mut processed = HashSet::new();
 
-        let mut headers = HashMap::new();
-        headers.insert(
-            "X-Sagapay-Signature".to_string(),
-            "sha256=<hex digest>".to_string(),
-        );
+    // Delivering the same notification twice acts on it once.
+    for _ in 0..2 {
+        match handle_webhook(&webhook_handler, &headers, SAMPLE_BODY, &mut processed) {
+            Ok(()) => {}
+            Err(err) => eprintln!("Rejected webhook: {}", err),
+        }
+    }
 
-        if let Err(err) = handle_webhook(&client, headers, SAMPLE_BODY.to_string()).await {
-            eprintln!("Webhook error: {}", err);
+    // A tampered body fails the signature check.
+    let tampered = SAMPLE_BODY.replace("\"1.5\"", "\"1500\"");
+    if let Err(err) = handle_webhook(&webhook_handler, &headers, &tampered, &mut processed) {
+        println!("Tampered body rejected: {}", err);
+    }
+
+    // With a maximum age, the 2025 sample is refused as stale.
+    let strict = WebhookHandler::new(signing_secret).with_max_age(DEFAULT_MAX_AGE);
+    if let Err(err) = handle_webhook(&strict, &headers, SAMPLE_BODY, &mut HashSet::new()) {
+        println!("Old notification rejected: {}", err);
+    }
+}
+
+// What you would call from your HTTP route. Answer 401 when it returns an
+// error, and 200 otherwise; if your own processing fails, answer 5xx so
+// SagaPay retries.
+fn handle_webhook(
+    webhook_handler: &WebhookHandler,
+    headers: &HashMap<String, String>,
+    body: &str,
+    processed: &mut HashSet<String>,
+) -> Result<(), Error> {
+    // Looks up X-Sagapay-Merchant-Signature (matched case-insensitively),
+    // verifies it over the exact raw body, then parses the body.
+    let webhook = webhook_handler.process_webhook_from_request(headers, body)?;
+
+    // Delivery is at-least-once, and a replayed request carries a valid
+    // signature too, so act on each ID only once.
+    if !processed.insert(webhook.id.clone()) {
+        println!("Duplicate notification {} - already handled.", webhook.id);
+        return Ok(());
+    }
+
+    fulfil(&webhook);
+    Ok(())
+}
+
+fn fulfil(webhook: &WebhookPayload) {
+    println!("SagaPay Webhook received:");
+    println!("  Transaction ID: {}", webhook.id);
+    println!("  Type: {:?}", webhook.transaction_type);
+    println!("  Asset: {:?}", webhook.asset);
+    println!("  Amount: {}", webhook.amount);
+
+    // Status is currently always COMPLETED.
+    match webhook.transaction_type {
+        IpnType::Deposit => {
+            // Check asset, contract_address and amount against the order
+            // before you mark it paid.
+            println!(
+                "Deposit completed: {} received at {}",
+                webhook.amount, webhook.address
+            );
+            // Example: update_order_status(webhook.udf, "paid");
+        }
+        IpnType::Withdrawal => {
+            println!(
+                "Withdrawal completed: {} sent to {}",
+                webhook.amount, webhook.address
+            );
+            // Example: update_withdrawal_status(webhook.udf, "completed");
         }
     }
 }
 
-// Example handler for webhooks in an HTTP server context
-async fn handle_webhook(
-    client: &Client,
-    headers: HashMap<String, String>,
-    body: String,
-) -> Result<(), Error> {
-    // The IPN secret is issued by SagaPay for signing notifications. It is NOT
-    // your API secret. Use `None` if you have not been issued one - the
-    // signature is then skipped and verify_ipn below does the real checking.
-    let ipn_secret: Option<String> = std::env::var("SAGAPAY_IPN_SECRET").ok();
-    let webhook_handler = WebhookHandler::new(ipn_secret);
-
-    // Look up the signature header (matched case-insensitively) and validate
-    let webhook_data = webhook_handler.process_webhook_from_request(&headers, &body)?;
-
-    // Extract important fields
-    let transaction_id = &webhook_data.id;
-    let transaction_type = &webhook_data.transaction_type;
-    let status = &webhook_data.status;
-    let address = &webhook_data.address;
-    let amount = &webhook_data.amount;
-    let udf = webhook_data.udf.as_deref(); // Your custom reference field
-    let tx_hash = webhook_data.tx_hash.as_deref();
-
-    // Log the webhook for debugging
-    println!("SagaPay Webhook received:");
-    println!("  Transaction ID: {}", transaction_id);
-    println!("  Type: {:?}", transaction_type);
-    println!("  Status: {:?}", status);
-    println!("  Address: {}", address);
-    println!("  Amount: {}", amount);
-
-    if let Some(udf) = udf {
-        println!("  UDF: {}", udf);
-    }
-
-    if let Some(hash) = tx_hash {
-        println!("  Transaction Hash: {}", hash);
-    }
-
-    // Primary check: ask the API to confirm the notification before acting on
-    // it. Notifications are delivered at least once, so make the work below
-    // idempotent - key it on the transaction ID.
-    if let Some(hash) = tx_hash {
-        let verification = client
-            .verify_ipn(VerifyIpnParams {
-                txn_hash: hash.to_string(),
-                ipn_type: transaction_type.clone(),
-                amount: amount.clone(),
-                address: address.clone(),
-            })
-            .await?;
-
-        if !verification.verified {
-            println!("Verification failed - ignoring this notification.");
-            return Ok(());
-        }
-
-        println!("  Verified: {}", verification.verified);
-    }
-
-    // Handle different transaction statuses. Today SagaPay only sends
-    // COMPLETED notifications, but the payload can carry any status.
-    match status {
-        TransactionStatus::Completed => {
-            // Payment successful, update your database and trigger necessary actions
-            println!("Transaction completed successfully!");
-
-            // Here you would update your database or trigger business logic
-            // based on the transaction type and your custom reference (UDF)
-            match transaction_type {
-                IpnType::Deposit => {
-                    // Handle successful deposit
-                    println!("Deposit completed: {} received at {}", amount, address);
-                    // Example: update_order_status(udf, "paid");
-                }
-                IpnType::Withdrawal => {
-                    // Handle successful withdrawal
-                    println!("Withdrawal completed: {} sent to {}", amount, address);
-                    // Example: update_withdrawal_status(udf, "completed");
-                }
-            }
-        }
-
-        TransactionStatus::Failed => {
-            // Handle failed transaction
-            println!("Transaction failed: {:?} for {}", transaction_type, amount);
-            // Example: update_transaction_status(udf, "failed");
-        }
-
-        TransactionStatus::Pending | TransactionStatus::Processing => {
-            // Handle pending or processing transaction
-            println!(
-                "Transaction is {:?}: {:?} for {}",
-                status, transaction_type, amount
-            );
-            // Example: update_transaction_status(udf, format!("{:?}", status).to_lowercase());
-        }
-
-        TransactionStatus::Cancelled => {
-            // Handle cancelled transaction
-            println!(
-                "Transaction cancelled: {:?} for {}",
-                transaction_type, amount
-            );
-            // Example: update_transaction_status(udf, "cancelled");
-        }
-    }
-
-    // Return success
-    Ok(())
+/// Sign a body the way SagaPay does: "sha256=" + hex HMAC-SHA256
+fn sign(secret: &str, body: &str) -> String {
+    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("any key size");
+    mac.update(body.as_bytes());
+    format!("sha256={}", hex::encode(mac.finalize().into_bytes()))
 }
 
 // Example of how to use this in a web server (pseudocode)
@@ -186,15 +140,8 @@ async fn handle_webhook(
 //         }
 //     }
 //
-//     match handle_webhook(&client, headers, body).await {
+//     match handle_webhook(&webhook_handler, &headers, &body, &mut processed) {
 //         Ok(_) => HttpResponse::Ok().json(json!({"received": true})),
-//         Err(e) => {
-//             eprintln!("Webhook error: {:?}", e);
-//             // Still return 200 to prevent retries
-//             HttpResponse::Ok().json(json!({
-//                 "received": false,
-//                 "error": e.to_string()
-//             }))
-//         }
+//         Err(_) => HttpResponse::Unauthorized().finish(),
 //     }
 // }
